@@ -1,0 +1,272 @@
+
+mysql --local-infile=1 -uroot -p
+
+SET GLOBAL local_infile=1;
+
+create database project;
+
+use project
+
+create table project_sql( custid integer(10), username varchar(30), quote_count varchar(30), ip varchar(30), 
+entry_time varchar(30), prp_1 varchar(30), prp_2 varchar(30), prp_3 varchar(30), ms varchar(30), http_type varchar(30),
+ purchase_category varchar(30), total_count varchar(30), purchase_sub_category varchar(30), http_info varchar(3000), status_code integer(10) ,curr_time bigint);
+
+--checking the table
+show tables;
+
+load data local infile '/home/saif/cohort_f10/Dataset/Day_1.csv' into table project_sql fields terminated by ',';
+
+update project_sql set curr_time = CURRENT_TIMESTAMP() + 1 where curr_time IS NULL;
+
+
+
+------HIVE
+
+create database arif_hive;
+
+
+
+--------Managed Table------------
+create table arif_day1(custid int,username string,quote_count string,ip string,entry_time string,prp_1 string,prp_2 string,prp_3 string,ms string,http_type string,purchase_category string,total_count string,purchase_sub_category string,http_info string,status_code int,curr_time bigint) row format delimited fields terminated by ',';
+
+
+----checking hdfs
+hdfs dfs -ls HFS/Output/
+
+
+------importing the table from sql to hdfs
+sqoop import --connect jdbc:mysql://localhost:3306/project?useSSL=False --username root --password Welcome@123 --query "SELECT custid,username,quote_count,ip,entry_time,prp_1,prp_2,prp_3,ms,http_type,purchase_category,total_count,purchase_sub_category,http_info,status_code,curr_time from project_sql WHERE \$CONDITIONS"  --split-by custid --target-dir /user/saif/HFS/Output/project ;
+
+--------------importing the data from hdfs to hive-------------
+load data inpath '/user/saif/HFS/Output/project' into table arif_day1;
+
+
+-------checking that it is working or not
+select * from arif_day1 limit 3;
+
+=========Partition Table in Hive=========
+
+set hive.exec.dynamic.partition=True;     
+set hive.exec.dynamic.partition.mode=nonstrict;
+
+create external table arif_day1_ext1(custid int,username string,quote_count string,ip string,prp_1 string,prp_2 string,prp_3 string,ms string,http_type string,purchase_category string,total_count string,purchase_sub_category string,http_info string,status_code int ,curr_time bigint) partitioned by(year string,month string) row format delimited fields terminated by ',';
+
+
+
+insert overwrite table arif_day1_ext1 partition (year,month) select custid,username,quote_count,ip,prp_1,prp_2,prp_3,ms,http_type,purchase_category,total_count,purchase_sub_category,http_info,status_code,curr_time,
+cast(year(from_unixtime(unix_timestamp(entry_time,'dd/MMM/yyyy')))as string)as year,
+cast(month(from_unixtime(unix_timestamp(entry_time,'dd/MMM/yyyy')))as string)as month from arif_day1;
+
+-----------CREATING THE NEW MIDDLE TABLE B/W SCD1 AND DATA RECONIALIATION------------
+
+why this middle table-->
+using query output as a condition while exporting data from hive to MySQL is difficult, That's why we're using the condition from hive to hive and export
+the data from hive to sql without any condition normally by using sqoop export
+
+*****************In middle table we are adding all the columns from managed table but we are taking the data from exporting the table ,bcz of this i am adding two more columns as year,month in middle table so no.of middle table columns=no.of external table
+ 
+create table arif_day_middle(custid int,username string,quote_count string,ip string,entry_time string,prp_1 string,prp_2 string,prp_3 string,ms string,http_type string,purchase_category string,total_count string,purchase_sub_category string,http_info string,status_code int,year string,month string,curr_time bigint) row format delimited fields terminated by ',';
+
+
+-----inserting the data into middle table  from external table based on max_curr_time
+insert into table arif_day_middle select *
+from arif_day1_ext1 t1 join
+     (select max(curr_time) as max_date_time
+      from arif_day1_ext1
+     ) tt1
+     on tt1.max_date_time = t1.curr_time;
+
+
+==========================================================Creating table================================
+
+create table project_exp (
+	custid integer(10),
+	username varchar(30),
+	quote_count varchar(30),
+	ip varchar(30),
+	entry_time varchar(30),
+	prp_1 varchar(30),
+	prp_2 varchar(30),
+	prp_3 varchar(30),
+	ms varchar(30),
+	http_type varchar(30),
+	purchase_category varchar(30),
+	total_count varchar(30),
+	purchase_sub_category varchar(30),
+	http_info varchar(30),
+	status_code integer(10),
+	year varchar(100),
+	month varchar(100),
+	curr_time bigint
+);
+
+
+-------------------exporting the data from middle to sql
+sqoop export --connect jdbc:mysql://localhost:3306/project?useSSL=False --table project_exp --username root --password Welcome@123 --export-dir "/user/hive/warehouse/arif_hive.db/arif_day_middle" --input-fields-terminated-by ',';
+
+
+
+
+
+
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+FOR DAY 2:
+
+truncate table which are in sql database;
+
+truncate table project_sql;
+truncate table project_exp;
+
+
+then remove directory from HDFS
+
+ hdfs dfs -rm -r HFS/Output/project
+
+
+
+********************In hive also trunacte tables:************************
+
+truncate table arif_day1;
+truncate table arif_day_middle;
+
+-----loading the 2nd day file in sql from local to SQL
+
+load data local infile '/home/saif/cohort_f10/Dataset/Day_2.csv' into table project_sql fields terminated by ',';
+
+sqoop import --connect jdbc:mysql://localhost:3306/project?useSSL=False --username root --password Welcome@123 --query "SELECT custid,username,quote_count,ip,entry_time,prp_1,prp_2,prp_3,ms,http_type,purchase_category,total_count,purchase_sub_category,http_info,status_code,curr_time from project_sql WHERE \$CONDITIONS"  --split-by custid --target-dir /user/saif/HFS/Output/project ;
+
+load data inpath '/user/saif/HFS/Output/project' into table arif_day1;
+
+
+
+
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^SCD-1^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+insert overwrite table arif_day1_ext1 partition (year, month) select a.custid,a.username,a.quote_count,a.ip,a.prp_1,a.prp_2,a.prp_3,a.ms,a.http_type,
+a.purchase_category,a.total_count,a.purchase_sub_category,a.http_info,a.status_code,a.curr_time,
+cast(year(from_unixtime(unix_timestamp(entry_time , 'dd/MMM/yyyy'))) as string) as year, 
+cast(month(from_unixtime(unix_timestamp(entry_time , 'dd/MMM/yyyy'))) as string) as month from arif_day1 a
+join 
+arif_day1_ext1 b
+on a.custid=b.custid
+union
+select a.custid,a.username,a.quote_count,a.ip,a.prp_1,a.prp_2,a.prp_3,a.ms,a.http_type,
+a.purchase_category,a.total_count,a.purchase_sub_category,a.http_info,a.status_code,a.curr_time,
+cast(year(from_unixtime(unix_timestamp(entry_time , 'dd/MMM/yyyy'))) as string) as year, 
+cast(month(from_unixtime(unix_timestamp(entry_time , 'dd/MMM/yyyy'))) as string) as month
+from arif_day1 a
+left join 
+arif_day1_ext1 b
+on a.custid=b.custid
+where b.custid is null
+union
+select b.custid,b.username,b.quote_count,b.ip,b.prp_1,b.prp_2,b.prp_3,b.ms,b.http_type,
+b.purchase_category,b.total_count,b.purchase_sub_category,b.http_info,b.status_code,b.curr_time,
+cast(year(from_unixtime(unix_timestamp(entry_time , 'dd/MMM/yyyy'))) as string) as year, 
+cast(month(from_unixtime(unix_timestamp(entry_time , 'dd/MMM/yyyy'))) as string) as month
+from arif_day1 a
+right join 
+arif_day1_ext1 b
+on a.custid=b.custid
+where a.custid is null
+;
+
+-----inserting the data into middle table  from external table based on max_curr_time
+insert into table arif_day_middle select *
+from arif_day1_ext1 t1 join
+     (select max(curr_time) as max_date_time
+      from arif_day1_ext1
+     ) tt1
+     on tt1.max_date_time = t1.curr_time;
+
+
+-------------------exporting the data from middle to sql
+sqoop export --connect jdbc:mysql://localhost:3306/project?useSSL=False --table project_exp --username root --password Welcome@123 --export-dir "/user/hive/warehouse/arif_hive.db/arif_day_middle" --input-fields-terminated-by ',';
+
+
+
+
+
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+FOR DAY 3:
+
+truncate table which are in sql database;
+
+truncate table project_sql;
+truncate table project_exp;
+
+
+then remove directory from HDFS
+
+ hdfs dfs -rm -r HFS/Output/project
+
+
+
+********************In hive also trunacte tables:************************
+
+truncate table arif_day1;
+truncate table arif_day_middle;
+
+-----loading the 3nd day file in sql from local to SQL
+
+load data local infile '/home/saif/cohort_f10/Dataset/Day_3.csv' into table project_sql fields terminated by ',';
+
+sqoop import --connect jdbc:mysql://localhost:3306/project?useSSL=False --username root --password Welcome@123 --query "SELECT custid,username,quote_count,ip,entry_time,prp_1,prp_2,prp_3,ms,http_type,purchase_category,total_count,purchase_sub_category,http_info,status_code,curr_time from project_sql WHERE \$CONDITIONS"  --split-by custid --target-dir /user/saif/HFS/Output/project ;
+
+load data inpath '/user/saif/HFS/Output/project' into table arif_day1;
+
+
+
+
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^SCD-1^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+insert overwrite table arif_day1_ext1 partition (year, month) select a.custid,a.username,a.quote_count,a.ip,a.prp_1,a.prp_2,a.prp_3,a.ms,a.http_type,
+a.purchase_category,a.total_count,a.purchase_sub_category,a.http_info,a.status_code,a.curr_time,
+cast(year(from_unixtime(unix_timestamp(entry_time , 'dd/MMM/yyyy'))) as string) as year, 
+cast(month(from_unixtime(unix_timestamp(entry_time , 'dd/MMM/yyyy'))) as string) as month from arif_day1 a
+join 
+arif_day1_ext1 b
+on a.custid=b.custid
+union
+select a.custid,a.username,a.quote_count,a.ip,a.prp_1,a.prp_2,a.prp_3,a.ms,a.http_type,
+a.purchase_category,a.total_count,a.purchase_sub_category,a.http_info,a.status_code,a.curr_time,
+cast(year(from_unixtime(unix_timestamp(entry_time , 'dd/MMM/yyyy'))) as string) as year, 
+cast(month(from_unixtime(unix_timestamp(entry_time , 'dd/MMM/yyyy'))) as string) as month
+from arif_day1 a
+left join 
+arif_day1_ext1 b
+on a.custid=b.custid
+where b.custid is null
+union
+select b.custid,b.username,b.quote_count,b.ip,b.prp_1,b.prp_2,b.prp_3,b.ms,b.http_type,
+b.purchase_category,b.total_count,b.purchase_sub_category,b.http_info,b.status_code,b.curr_time,
+cast(year(from_unixtime(unix_timestamp(entry_time , 'dd/MMM/yyyy'))) as string) as year, 
+cast(month(from_unixtime(unix_timestamp(entry_time , 'dd/MMM/yyyy'))) as string) as month
+from arif_day1 a
+right join 
+arif_day1_ext1 b
+on a.custid=b.custid
+where a.custid is null
+;
+
+-----inserting the data into middle table  from external table based on max_curr_time
+insert into table arif_day_middle select *
+from arif_day1_ext1 t1 join
+     (select max(curr_time) as max_date_time
+      from arif_day1_ext1
+     ) tt1
+     on tt1.max_date_time = t1.curr_time;
+
+
+-------------------exporting the data from middle to sql
+sqoop export --connect jdbc:mysql://localhost:3306/project?useSSL=False --table project_exp --username root --password Welcome@123 --export-dir "/user/hive/warehouse/arif_hive.db/arif_day_middle" --input-fields-terminated-by ',';
+
+
+
+
+
+
+
+
+
+
+
+
